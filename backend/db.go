@@ -48,6 +48,10 @@ type DB struct {
 	idleConns   chan *Conn
 	cacheConns  chan *Conn
 	checkConn   *Conn
+	lastPing    int64
+
+	pushConnCount int64
+	popConnCount  int64
 }
 
 func Open(addr string, user string, password string, dbName string, maxConnNum int) (*DB, error) {
@@ -83,17 +87,21 @@ func Open(addr string, user string, password string, dbName string, maxConnNum i
 	for i := 0; i < db.maxConnNum; i++ {
 		if i < db.InitConnNum {
 			conn, err := db.newConn()
+
 			if err != nil {
 				db.Close()
 				return nil, err
 			}
-			conn.pushTimestamp = time.Now().Unix()
+
 			db.cacheConns <- conn
+			atomic.AddInt64(&db.pushConnCount, 1)
 		} else {
 			conn := new(Conn)
 			db.idleConns <- conn
+			atomic.AddInt64(&db.pushConnCount, 1)
 		}
 	}
+	db.SetLastPing()
 
 	return db, nil
 }
@@ -115,10 +123,10 @@ func (db *DB) State() string {
 	return state
 }
 
-func (db *DB) IdleConnCount() int {
+func (db *DB) ConnCount() (int, int, int64, int64) {
 	db.RLock()
 	defer db.RUnlock()
-	return len(db.cacheConns)
+	return len(db.idleConns), len(db.cacheConns), db.pushConnCount, db.popConnCount
 }
 
 func (db *DB) Close() error {
@@ -168,15 +176,19 @@ func (db *DB) Ping() error {
 	if db.checkConn == nil {
 		db.checkConn, err = db.newConn()
 		if err != nil {
-			db.closeConn(db.checkConn)
-			db.checkConn = nil
+			if db.checkConn != nil {
+				db.checkConn.Close()
+				db.checkConn = nil
+			}
 			return err
 		}
 	}
 	err = db.checkConn.Ping()
 	if err != nil {
-		db.closeConn(db.checkConn)
-		db.checkConn = nil
+		if db.checkConn != nil {
+			db.checkConn.Close()
+			db.checkConn = nil
+		}
 		return err
 	}
 	return nil
@@ -189,10 +201,23 @@ func (db *DB) newConn() (*Conn, error) {
 		return nil, err
 	}
 
+	co.pushTimestamp = time.Now().Unix()
+
 	return co, nil
 }
 
+func (db *DB) addIdleConn() {
+	conn := new(Conn)
+	select {
+	case db.idleConns <- conn:
+	default:
+		break
+	}
+}
+
 func (db *DB) closeConn(co *Conn) error {
+	atomic.AddInt64(&db.pushConnCount, 1)
+
 	if co != nil {
 		co.Close()
 		conns := db.getIdleConns()
@@ -204,6 +229,26 @@ func (db *DB) closeConn(co *Conn) error {
 				return nil
 			}
 		}
+	} else {
+		db.addIdleConn()
+	}
+	return nil
+}
+
+func (db *DB) closeConnNotAdd(co *Conn) error {
+	if co != nil {
+		co.Close()
+		conns := db.getIdleConns()
+		if conns != nil {
+			select {
+			case conns <- co:
+				return nil
+			default:
+				return nil
+			}
+		}
+	} else {
+		db.addIdleConn()
 	}
 	return nil
 }
@@ -230,7 +275,7 @@ func (db *DB) tryReuse(co *Conn) error {
 	//connection may be set names early
 	//we must use default utf8
 	if co.GetCharset() != mysql.DEFAULT_CHARSET {
-		err = co.SetCharset(mysql.DEFAULT_CHARSET)
+		err = co.SetCharset(mysql.DEFAULT_CHARSET, mysql.DEFAULT_COLLATION_ID)
 		if err != nil {
 			return err
 		}
@@ -269,6 +314,7 @@ func (db *DB) GetConnFromCache(cacheConns chan *Conn) *Conn {
 	var err error
 	for 0 < len(cacheConns) {
 		co = <-cacheConns
+		atomic.AddInt64(&db.popConnCount, 1)
 		if co != nil && PingPeroid < time.Now().Unix()-co.pushTimestamp {
 			err = co.Ping()
 			if err != nil {
@@ -288,13 +334,20 @@ func (db *DB) GetConnFromIdle(cacheConns, idleConns chan *Conn) (*Conn, error) {
 	var err error
 	select {
 	case co = <-idleConns:
-		err = co.Connect(db.addr, db.user, db.password, db.db)
+		atomic.AddInt64(&db.popConnCount, 1)
+		co, err := db.newConn()
 		if err != nil {
 			db.closeConn(co)
 			return nil, err
 		}
+		err = co.Ping()
+		if err != nil {
+			db.closeConn(co)
+			return nil, errors.ErrBadConn
+		}
 		return co, nil
 	case co = <-cacheConns:
+		atomic.AddInt64(&db.popConnCount, 1)
 		if co == nil {
 			return nil, errors.ErrConnIsNil
 		}
@@ -310,7 +363,9 @@ func (db *DB) GetConnFromIdle(cacheConns, idleConns chan *Conn) (*Conn, error) {
 }
 
 func (db *DB) PushConn(co *Conn, err error) {
+	atomic.AddInt64(&db.pushConnCount, 1)
 	if co == nil {
+		db.addIdleConn()
 		return
 	}
 	conns := db.getCacheConns()
@@ -319,7 +374,7 @@ func (db *DB) PushConn(co *Conn, err error) {
 		return
 	}
 	if err != nil {
-		db.closeConn(co)
+		db.closeConnNotAdd(co)
 		return
 	}
 	co.pushTimestamp = time.Now().Unix()
@@ -327,7 +382,7 @@ func (db *DB) PushConn(co *Conn, err error) {
 	case conns <- co:
 		return
 	default:
-		db.closeConn(co)
+		db.closeConnNotAdd(co)
 		return
 	}
 }
@@ -354,4 +409,12 @@ func (db *DB) GetConn() (*BackendConn, error) {
 		return nil, err
 	}
 	return &BackendConn{c, db}, nil
+}
+
+func (db *DB) SetLastPing() {
+	db.lastPing = time.Now().Unix()
+}
+
+func (db *DB) GetLastPing() int64 {
+	return db.lastPing
 }

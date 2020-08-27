@@ -1,4 +1,4 @@
-#如何利用一个数据库中间件扩展MySQL集群——kingshard使用指南
+# 如何利用一个数据库中间件扩展MySQL集群——kingshard使用指南
 
 上次写了一篇有关kingshard架构设计的[文章](./architecture_of_kingshard_CN.md),得到了很多热心网友的关注。其中有网友提到：希望再写一篇关于如何利用kingshard搭建一个可扩展的MySQL集群的文档。利用假期时间，写了一篇kingshard使用指南，在这篇文章中，我将结合自己对MySQL Proxy的理解，为大家讲述如何正确使用kingshard数据库中间件。
 
@@ -24,9 +24,16 @@
 # kingshard的地址和端口
 addr : 0.0.0.0:9696
 
-# 连接kingshard的用户名和密码
-user :  kingshard
-password : kingshard
+# 连接kingshard的用户名和密码的用户列表
+-user_list:
+-
+    user :  kingshard
+    password : kingshard
+#kingshard的web API 端口
+web_addr : 0.0.0.0:9797
+#调用API的用户名和密码
+web_user : admin
+web_password : admin
 
 # log级别，[debug|info|warn|error],默认是error
 log_level : debug
@@ -74,17 +81,20 @@ nodes :
     slave :
     down_after_noalive: 100
 
-# 分表规则
-schema :
-    #分表使用的db，所有的分表必须都在这个db中。
-    db : kingshard
+# 各用户的分表规则
+schema_list :
+-
+    #schema的所属用户名
+    user: kingshard
     #分表分布的node名字
     nodes: [node1,node2]
 	#所有未分表的SQL，都会发往默认node。
     default: node1
     shard:
     -
-        #分表名字
+        #分表使用的db
+        db : kingshard
+		#分表名字
         table: test_shard_hash
         #分表字段
         key: id
@@ -97,7 +107,9 @@ schema :
         locations: [4,4]
 
     -
-		#分表名字
+		#分表使用的db
+        db : kingshard
+        #分表名字
         table: test_shard_range
 	    #分表字段
         key: id
@@ -121,13 +133,13 @@ schema :
 
 ### (2). 安装和启动kingshard
 
-1. 安装Go语言环境（Go版本1.3以上），具体步骤请Google。
+1. 安装Go语言环境（请使用最新版），具体步骤请Google。
 2. git clone https://github.com/flike/kingshard.git src/github.com/flike/kingshard
 3. cd src/github.com/flike/kingshard
 4. source ./dev.sh
 5. make
 6. 设置配置文件
-7. 运行kingshard。./bin/kingshard -config=etc/ks.yaml
+7. 运行kingshard ./bin/kingshard -config=etc/ks.yaml
 
 **注意：kingshard会响应SIGINT,SIGTERM,SIGQUIT这三个信号，平滑退出。在部署kingshard机器上应避免产生这三个信号，以免造成kingshard非正常退出！后台运行kingshard建议使用supervisor工具**
 

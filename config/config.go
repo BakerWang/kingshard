@@ -16,16 +16,23 @@ package config
 
 import (
 	"io/ioutil"
-	"os"
 
-	"github.com/flike/kingshard/core/yaml"
+	"gopkg.in/yaml.v2"
 )
+
+//用于通过api保存配置
+var configFileName string
 
 //整个config文件对应的结构
 type Config struct {
-	Addr        string       `yaml:"addr"`
-	User        string       `yaml:"user"`
-	Password    string       `yaml:"password"`
+	Addr     		string       	`yaml:"addr"`
+	PrometheusAddr 	string		 	`yaml:"prometheus_addr"`
+	UserList 		[]UserConfig 	`yaml:"user_list"`
+
+	WebAddr     string `yaml:"web_addr"`
+	WebUser     string `yaml:"web_user"`
+	WebPassword string `yaml:"web_password"`
+
 	LogPath     string       `yaml:"log_path"`
 	LogLevel    string       `yaml:"log_level"`
 	LogSql      string       `yaml:"log_sql"`
@@ -35,7 +42,13 @@ type Config struct {
 	Charset     string       `yaml:"proxy_charset"`
 	Nodes       []NodeConfig `yaml:"nodes"`
 
-	Schema SchemaConfig `yaml:"schema"`
+	SchemaList []SchemaConfig `yaml:"schema_list"`
+}
+
+//user_list对应的配置
+type UserConfig struct {
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
 }
 
 //node节点对应的配置
@@ -53,14 +66,15 @@ type NodeConfig struct {
 
 //schema对应的结构体
 type SchemaConfig struct {
-	DB        string        `yaml:"db"`
+	User      string        `yaml:"user"`
 	Nodes     []string      `yaml:"nodes"`
-	Default   string        `yaml:"default"` //default route rule
+	Default   string        `yaml:"default"` //default node
 	ShardRule []ShardConfig `yaml:"shard"`   //route rule
 }
 
 //range,hash or date
 type ShardConfig struct {
+	DB            string   `yaml:"db"`
 	Table         string   `yaml:"table"`
 	Key           string   `yaml:"key"`
 	Nodes         []string `yaml:"nodes"`
@@ -72,7 +86,7 @@ type ShardConfig struct {
 
 func ParseConfigData(data []byte) (*Config, error) {
 	var cfg Config
-	if err := yaml.Unmarshal([]byte(data), &cfg); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -84,6 +98,8 @@ func ParseConfigFile(fileName string) (*Config, error) {
 		return nil, err
 	}
 
+	configFileName = fileName
+
 	return ParseConfigData(data)
 }
 
@@ -93,13 +109,7 @@ func WriteConfigFile(cfg *Config) error {
 		return err
 	}
 
-	execPath, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
-	configPath := execPath + "/etc/ks.yaml"
-	err = ioutil.WriteFile(configPath, data, 0755)
+	err = ioutil.WriteFile(configFileName, data, 0755)
 	if err != nil {
 		return err
 	}

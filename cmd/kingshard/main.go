@@ -26,8 +26,9 @@ import (
 
 	"github.com/flike/kingshard/config"
 	"github.com/flike/kingshard/core/golog"
-	"github.com/flike/kingshard/core/hack"
+	"github.com/flike/kingshard/monitor"
 	"github.com/flike/kingshard/proxy/server"
+	"github.com/flike/kingshard/web"
 )
 
 var configFile *string = flag.String("config", "/etc/ks.yaml", "kingshard config file")
@@ -38,6 +39,11 @@ const (
 	sqlLogName = "sql.log"
 	sysLogName = "sys.log"
 	MaxLogSize = 1024 * 1024 * 1024
+)
+
+var (
+	BuildDate    string
+	BuildVersion string
 )
 
 const banner string = `
@@ -53,8 +59,8 @@ func main() {
 	fmt.Print(banner)
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	flag.Parse()
-	fmt.Printf("Git commit:%s\n", hack.Version)
-	fmt.Printf("Build time:%s\n", hack.Compile)
+	fmt.Printf("Git commit:%s\n", BuildVersion)
+	fmt.Printf("Build time:%s\n", BuildDate)
 	if *version {
 		return
 	}
@@ -95,11 +101,29 @@ func main() {
 	}
 
 	var svr *server.Server
+	var apiSvr *web.ApiServer
+	var prometheusSvr *monitor.Prometheus
 	svr, err = server.NewServer(cfg)
 	if err != nil {
 		golog.Error("main", "main", err.Error(), 0)
 		golog.GlobalSysLogger.Close()
 		golog.GlobalSqlLogger.Close()
+		return
+	}
+	apiSvr, err = web.NewApiServer(cfg, svr)
+	if err != nil {
+		golog.Error("main", "main", err.Error(), 0)
+		golog.GlobalSysLogger.Close()
+		golog.GlobalSqlLogger.Close()
+		svr.Close()
+		return
+	}
+	prometheusSvr, err = monitor.NewPrometheus(cfg.PrometheusAddr, svr)
+	if err != nil {
+		golog.Error("main", "main", err.Error(), 0)
+		golog.GlobalSysLogger.Close()
+		golog.GlobalSqlLogger.Close()
+		svr.Close()
 		return
 	}
 
@@ -109,6 +133,7 @@ func main() {
 		syscall.SIGTERM,
 		syscall.SIGQUIT,
 		syscall.SIGPIPE,
+		syscall.SIGUSR1,
 	)
 
 	go func() {
@@ -121,10 +146,19 @@ func main() {
 				svr.Close()
 			} else if sig == syscall.SIGPIPE {
 				golog.Info("main", "main", "Ignore broken pipe signal", 0)
+			} else if sig == syscall.SIGUSR1 {
+				golog.Info("main", "main", "Got update config signal", 0)
+				newCfg, err := config.ParseConfigFile(*configFile)
+				if err != nil {
+					golog.Error("main", "main", fmt.Sprintf("parse config file error:%s", err.Error()), 0)
+				} else {
+					svr.UpdateConfig(newCfg)
+				}
 			}
 		}
 	}()
-
+	go apiSvr.Run()
+	go prometheusSvr.Run()
 	svr.Run()
 }
 

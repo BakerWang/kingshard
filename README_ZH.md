@@ -1,8 +1,8 @@
-[![Author](https://img.shields.io/badge/author-@flike-blue.svg?style=flat)](http://weibo.com/chenfei001) [![Build Status](https://travis-ci.org/flike/kingshard.svg?branch=master)](https://travis-ci.org/flike/kingshard) [![Project Status](https://img.shields.io/badge/status-stable-green.svg)](https://github.com/flike/kingshard) [![Platform](https://img.shields.io/badge/platform-%20Linux%20Windows%20macOS-green.svg?style=flat)](https://github.com/flike/kingshard)
+[![Build Status](https://travis-ci.org/flike/kingshard.svg?branch=master)](https://travis-ci.org/flike/kingshard)
 
 # kingshard简介
 
-kingshard是一个由Go开发高性能MySQL Proxy项目，kingshard在满足基本的读写分离的功能上，致力于简化MySQL分库分表操作；能够让DBA通过kingshard轻松平滑地实现MySQL数据库扩容。 **kingshard的性能是直连MySQL性能的80%以上**。
+kingshard是一个由Go开发高性能MySQL Proxy项目，kingshard在满足基本的读写分离的功能上，致力于简化MySQL分库分表操作；能够让DBA通过kingshard轻松平滑地实现MySQL数据库扩容。 **kingshard的性能是直连MySQL性能的80%以上**。线上使用kingshard，**请从[release页面](https://github.com/flike/kingshard/releases)获取最新版！！**
 
 ## 主要功能：
 
@@ -17,10 +17,12 @@ kingshard是一个由Go开发高性能MySQL Proxy项目，kingshard在满足基�
 - 支持到后端DB的最大连接数限制。
 - 支持SQL日志及慢日志输出。
 - 支持SQL黑名单机制。
-- 支持客户端IP访问白名单机制，只有白名单中的IP才能访问kingshard。
+- 支持客户端IP访问白名单机制，只有白名单中的IP才能访问kingshard（支持IP 段）。
 - 支持字符集设置。
 - 支持last_insert_id功能。
-- 支持动态修改kingshard部分配置项（具体参考管理端命令）。
+- 支持热加载配置文件，动态修改kingshard配置项（具体参考管理端命令）。
+- 支持以Web API调用的方式管理kingshard。
+- 支持多用户模式，不同用户之间的表是权限隔离的，互不感知。
 
 ### 2. sharding功能
 
@@ -50,13 +52,19 @@ kingshard是一个由Go开发高性能MySQL Proxy项目，kingshard在满足基�
 
 [6.管理端命令介绍](./doc/KingDoc/admin_command_introduce.md)
 
-[7.kingshard SQL黑名单功能介绍](./doc/KingDoc/sql_blacklist_introduce.md)
+[7.管理端Web API接口介绍](./doc/KingDoc/kingshard_admin_api.md)
 
-[8.kingshard的FAQ](./doc/KingDoc/function_FAQ.md)
+[8.kingshard SQL黑名单功能介绍](./doc/KingDoc/sql_blacklist_introduce.md)
 
-[9.kingshard SQL支持范围](./doc/KingDoc/kingshard_support_sql.md)
+[9.kingshard的FAQ](./doc/KingDoc/function_FAQ.md)
 
-[10.如何配合LVS实现集群部署](./doc/KingDoc/how_to_use_lvs.md)
+[10.kingshard SQL支持范围](./doc/KingDoc/kingshard_support_sql.md)
+
+[11.如何配合LVS实现集群部署](./doc/KingDoc/how_to_use_lvs.md)
+
+[12.Kinghshard接入prometheus](./doc/KingDoc/prometheus.md)
+
+[13.kingshard视频教程](https://www.imooc.com/learn/1078)
 
 ### kingshard架构与设计
 
@@ -74,11 +82,11 @@ kingshard是一个由Go开发高性能MySQL Proxy项目，kingshard在满足基�
 
 https://github.com/flike/kingshard/issues/148
 
-## 打赏
-https://github.com/flike/kingshard/blob/master/doc/KingDoc/support.md
-
 ## 反馈
-kingshard开源以来，经过不断地迭代开发，功能较为完善，稳定性有较大提升。 **目前已有上十家公司在生产环境使用kingshard作为MySQL代理。** 如果您在使用kingshard的过程中发现BUG或者有新的功能需求，非常欢迎您发邮件至hiflike#gmail.com与作者取得联系，或者加入QQ群(147926796)交流。
+kingshard开源以来，经过不断地迭代开发，功能较为完善，稳定性有较大提升。 **目前已有超过50家公司在生产环境使用kingshard作为MySQL代理。** 如果您在使用kingshard的过程中发现BUG或者有新的功能需求，请发邮件至flikechen#qq.com与作者取得联系，或者加入QQ群(147926796)交流。
+欢迎关注**后端技术快讯**公众号，有关kingshard的最新消息与后端架构设计类的文章，都会在这个公众号分享。
+
+<img src="./doc/KingDoc/wechat_pic.png" width="20%" height="20%">
 
 ## License
 

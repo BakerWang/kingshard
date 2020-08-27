@@ -46,22 +46,13 @@ type Node struct {
 
 	DownAfterNoAlive time.Duration
 
-	LastMasterPing int64
-	LastSlavePing  int64
+	Online bool
 }
 
 func (n *Node) CheckNode() {
 	//to do
 	//1 check connection alive
-	//2 check remove mysql server alive
-
-	n.checkMaster()
-	n.checkSlave()
-
-	n.LastMasterPing = time.Now().Unix()
-	n.LastSlavePing = n.LastMasterPing
-
-	for {
+	for n.Online {
 		n.checkMaster()
 		n.checkSlave()
 		time.Sleep(16 * time.Second)
@@ -114,16 +105,20 @@ func (n *Node) checkMaster() {
 	} else {
 		if atomic.LoadInt32(&(db.state)) == Down {
 			golog.Info("Node", "checkMaster", "Master up", 0, "db.Addr", db.Addr())
-			n.UpMaster(db.addr)
+			err := n.UpMaster(db.addr)
+			if err != nil {
+				golog.Error("Node", "checkMaster", "UpMaster", 0, "db.Addr", db.Addr(), "error", err.Error())
+				return
+			}
 		}
-		n.LastMasterPing = time.Now().Unix()
+		db.SetLastPing()
 		if atomic.LoadInt32(&(db.state)) != ManualDown {
 			atomic.StoreInt32(&(db.state), Up)
 		}
 		return
 	}
 
-	if int64(n.DownAfterNoAlive) > 0 && time.Now().Unix()-n.LastMasterPing > int64(n.DownAfterNoAlive/time.Second) {
+	if int64(n.DownAfterNoAlive) > 0 && time.Now().Unix()-db.GetLastPing() > int64(n.DownAfterNoAlive/time.Second) {
 		golog.Info("Node", "checkMaster", "Master down", 0,
 			"db.Addr", db.Addr(),
 			"Master_down_time", int64(n.DownAfterNoAlive/time.Second))
@@ -149,15 +144,15 @@ func (n *Node) checkSlave() {
 				golog.Info("Node", "checkSlave", "Slave up", 0, "db.Addr", slaves[i].Addr())
 				n.UpSlave(slaves[i].addr)
 			}
-			n.LastSlavePing = time.Now().Unix()
+			slaves[i].SetLastPing()
 			if atomic.LoadInt32(&(slaves[i].state)) != ManualDown {
 				atomic.StoreInt32(&(slaves[i].state), Up)
 			}
 			continue
 		}
 
-		if int64(n.DownAfterNoAlive) > 0 && time.Now().Unix()-n.LastSlavePing > int64(n.DownAfterNoAlive/time.Second) {
-			golog.Info("Node", "checkMaster", "Master down", 0,
+		if int64(n.DownAfterNoAlive) > 0 && time.Now().Unix()-slaves[i].GetLastPing() > int64(n.DownAfterNoAlive/time.Second) {
+			golog.Info("Node", "checkSlave", "Slave down", 0,
 				"db.Addr", slaves[i].Addr(),
 				"slave_down_time", int64(n.DownAfterNoAlive/time.Second))
 			//If can't ping slave after DownAfterNoAlive, set slave Down
@@ -177,7 +172,7 @@ func (n *Node) AddSlave(addr string) error {
 	n.Lock()
 	defer n.Unlock()
 	for _, v := range n.Slave {
-		if v.addr == addr {
+		if strings.Split(v.addr, WeightSplit)[0] == strings.Split(addr, WeightSplit)[0] {
 			return errors.ErrSlaveExist
 		}
 	}
@@ -263,6 +258,7 @@ func (n *Node) UpMaster(addr string) error {
 	db, err := n.UpDB(addr)
 	if err != nil {
 		golog.Error("Node", "UpMaster", err.Error(), 0)
+		return err
 	}
 	n.Master = db
 	return err

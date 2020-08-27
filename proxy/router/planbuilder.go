@@ -18,10 +18,11 @@ import (
 	"sort"
 	"strconv"
 
+	"strings"
+
 	"github.com/flike/kingshard/core/errors"
 	"github.com/flike/kingshard/core/golog"
 	"github.com/flike/kingshard/sqlparser"
-	"strings"
 )
 
 const (
@@ -92,16 +93,10 @@ func (plan *Plan) getHashShardTableIndex(expr sqlparser.BoolExpr) ([]int, error)
 				return nil, err
 			}
 			return []int{index}, nil
-		case "<", "<=", ">", ">=":
+		case "<", "<=", ">", ">=", "not in":
 			return plan.Rule.SubTableIndexs, nil
 		case "in":
 			return plan.getTableIndexsByTuple(criteria.Right)
-		case "not in":
-			l, err := plan.getTableIndexsByTuple(criteria.Right)
-			if err != nil {
-				return nil, err
-			}
-			return plan.notList(l), nil
 		}
 	case *sqlparser.RangeCond: //between ... and ...
 		return plan.Rule.SubTableIndexs, nil
@@ -323,20 +318,21 @@ func (plan *Plan) calRouteIndexs() error {
 	}
 }
 
-func (plan *Plan) checkValuesType(vals sqlparser.Values) sqlparser.Values {
+func (plan *Plan) checkValuesType(vals sqlparser.Values) (sqlparser.Values, error) {
 	// Analyze first value of every item in the list
 	for i := 0; i < len(vals); i++ {
 		switch tuple := vals[i].(type) {
 		case sqlparser.ValTuple:
 			result := plan.getValueType(tuple[0])
 			if result != VALUE_NODE {
-				panic(sqlparser.NewParserError("insert is too complex"))
+				return nil, errors.ErrInsertTooComplex
 			}
 		default:
-			panic(sqlparser.NewParserError("insert is too complex"))
+			//panic(sqlparser.NewParserError("insert is too complex"))
+			return nil, errors.ErrInsertTooComplex
 		}
 	}
-	return vals
+	return vals, nil
 }
 
 /*返回valExpr表达式对应的类型*/
@@ -347,7 +343,7 @@ func (plan *Plan) getValueType(valExpr sqlparser.ValExpr) int {
 		if string(node.Qualifier) == plan.Rule.Table {
 			node.Qualifier = nil
 		}
-		if string(node.Name) == plan.Rule.Key {
+		if strings.ToLower(string(node.Name)) == plan.Rule.Key {
 			return EID_NODE //表示这是分片id对应的node
 		}
 	case sqlparser.ValTuple:
@@ -485,7 +481,7 @@ func (plan *Plan) GetIRKeyIndex(cols sqlparser.Columns) error {
 	for i, _ := range cols {
 		colname := string(cols[i].(*sqlparser.NonStarExpr).Expr.(*sqlparser.ColName).Name)
 
-		if colname == plan.Rule.Key {
+		if strings.ToLower(colname) == plan.Rule.Key {
 			plan.KeyIndex = i
 			break
 		}
@@ -550,64 +546,65 @@ func makeList(start, end int) []int {
 	return list
 }
 
+//indexes is sequential
 //if value is 2016, and indexs is [2015,2016,2017]
 //the result is [2015,2016]
-func makeLeList(value int, indexs []int) []int {
-	sort.Ints(indexs)
-	for k, v := range indexs {
+func makeLeList(value int, indexes []int) []int {
+	for k, v := range indexes {
 		if v == value {
-			return indexs[:k+1]
+			return indexes[:k+1]
 		}
 	}
 	return nil
 }
 
+//indexes is sequential
 //if value is 2016, and indexs is [2015,2016,2017,2018]
 //the result is [2016,2017,2018]
-func makeGeList(value int, indexs []int) []int {
-	sort.Ints(indexs)
-	for k, v := range indexs {
+func makeGeList(value int, indexes []int) []int {
+	for k, v := range indexes {
 		if v == value {
-			return indexs[k:]
+			return indexes[k:]
 		}
 	}
 	return nil
 }
 
+//indexes is sequential
 //if value is 2016, and indexs is [2015,2016,2017,2018]
 //the result is [2015]
-func makeLtList(value int, indexs []int) []int {
-	sort.Ints(indexs)
-	for k, v := range indexs {
+func makeLtList(value int, indexes []int) []int {
+	for k, v := range indexes {
 		if v == value {
-			return indexs[:k]
+			return indexes[:k]
 		}
 	}
 	return nil
 }
 
+//indexes is sequential
 //if value is 2016, and indexs is [2015,2016,2017,2018]
 //the result is [2017,2018]
-func makeGtList(value int, indexs []int) []int {
-	sort.Ints(indexs)
-	for k, v := range indexs {
+func makeGtList(value int, indexes []int) []int {
+	for k, v := range indexes {
 		if v == value {
-			return indexs[k+1:]
+			return indexes[k+1:]
 		}
 	}
 	return nil
 }
 
+//indexes is sequential
 //if start is 2016, end is 2017. indexs is [2015,2016,2017,2018]
 //the result is [2016,2017]
-func makeBetweenList(start, end int, indexs []int) []int {
+func makeBetweenList(start, end int, indexes []int) []int {
 	var startIndex, endIndex int
 	var SetStart bool
 	if end < start {
 		start, end = end, start
 	}
-	sort.Ints(indexs)
-	for k, v := range indexs {
+
+	for k, v := range indexes {
 		if v == start {
 			startIndex = k
 			SetStart = true
@@ -615,7 +612,7 @@ func makeBetweenList(start, end int, indexs []int) []int {
 		if v == end {
 			endIndex = k
 			if SetStart {
-				return indexs[startIndex : endIndex+1]
+				return indexes[startIndex : endIndex+1]
 			}
 		}
 	}

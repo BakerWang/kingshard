@@ -45,6 +45,8 @@ func (c *ClientConn) handleQuery(sql string) (err error) {
 					err.Error(), 0,
 					"stack", string(buf), "sql", sql)
 			}
+
+			err = errors.ErrInternalServer
 			return
 		}
 	}()
@@ -89,13 +91,21 @@ func (c *ClientConn) handleQuery(sql string) (err error) {
 	case *sqlparser.Rollback:
 		return c.handleRollback()
 	case *sqlparser.Admin:
-		return c.handleAdmin(v)
+		if c.user == "root" {
+			return c.handleAdmin(v)
+		}
+		return fmt.Errorf("statement %T not support now", stmt)
 	case *sqlparser.AdminHelp:
-		return c.handleAdminHelp(v)
+		if c.user == "root" {
+			return c.handleAdminHelp(v)
+		}
+		return fmt.Errorf("statement %T not support now", stmt)
 	case *sqlparser.UseDB:
 		return c.handleUseDB(v.DB)
 	case *sqlparser.SimpleSelect:
 		return c.handleSimpleSelect(v)
+	case *sqlparser.Truncate:
+		return c.handleExec(stmt, nil)
 	default:
 		return fmt.Errorf("statement %T not support now", stmt)
 	}
@@ -141,10 +151,12 @@ func (c *ClientConn) getBackendConn(n *backend.Node, fromSlave bool) (co *backen
 	}
 
 	if err = co.UseDB(c.db); err != nil {
+		//reset the database to null
+		c.db = ""
 		return
 	}
 
-	if err = co.SetCharset(c.charset); err != nil {
+	if err = co.SetCharset(c.charset, c.collation); err != nil {
 		return
 	}
 
@@ -198,7 +210,7 @@ func (c *ClientConn) executeInNode(conn *backend.BackendConn, sql string, args [
 	}
 	execTime := float64(time.Now().UnixNano()-startTime) / float64(time.Millisecond)
 	if strings.ToLower(c.proxy.logSql[c.proxy.logSqlIndex]) != golog.LogSqlOff &&
-		execTime > float64(c.proxy.slowLogTime[c.proxy.slowLogTimeIndex]) {
+		execTime >= float64(c.proxy.slowLogTime[c.proxy.slowLogTimeIndex]) {
 		c.proxy.counter.IncrSlowLogTotal()
 		golog.OutputSql(state, "%.1fms - %s->%s:%s",
 			execTime,
@@ -253,7 +265,7 @@ func (c *ClientConn) executeInMultiNodes(conns map[string]*backend.BackendConn, 
 			}
 			execTime := float64(time.Now().UnixNano()-startTime) / float64(time.Millisecond)
 			if c.proxy.logSql[c.proxy.logSqlIndex] != golog.LogSqlOff &&
-				execTime > float64(c.proxy.slowLogTime[c.proxy.slowLogTimeIndex]) {
+				execTime >= float64(c.proxy.slowLogTime[c.proxy.slowLogTimeIndex]) {
 				c.proxy.counter.IncrSlowLogTotal()
 				golog.OutputSql(state, "%.1fms - %s->%s:%s",
 					execTime,
@@ -267,11 +279,11 @@ func (c *ClientConn) executeInMultiNodes(conns map[string]*backend.BackendConn, 
 		wg.Done()
 	}
 
-	offsert := 0
+	offset := 0
 	for nodeName, co := range conns {
 		s := sqls[nodeName] //[]string
-		go f(rs, offsert, s, co)
-		offsert += len(s)
+		go f(rs, offset, s, co)
+		offset += len(s)
 	}
 
 	wg.Wait()
@@ -283,7 +295,9 @@ func (c *ClientConn) executeInMultiNodes(conns map[string]*backend.BackendConn, 
 			err = e
 			break
 		}
-		r[i] = rs[i].(*mysql.Result)
+		if rs[i] != nil {
+			r[i] = rs[i].(*mysql.Result)
+		}
 	}
 
 	return r, err
@@ -293,12 +307,10 @@ func (c *ClientConn) closeConn(conn *backend.BackendConn, rollback bool) {
 	if c.isInTransaction() {
 		return
 	}
-
+	defer conn.Close()
 	if rollback {
 		conn.Rollback()
 	}
-
-	conn.Close()
 }
 
 func (c *ClientConn) closeShardConns(conns map[string]*backend.BackendConn, rollback bool) {
@@ -342,7 +354,7 @@ func (c *ClientConn) newEmptyResultset(stmt *sqlparser.Select) *mysql.Resultset 
 }
 
 func (c *ClientConn) handleExec(stmt sqlparser.Statement, args []interface{}) error {
-	plan, err := c.schema.rule.BuildPlan(stmt)
+	plan, err := c.schema.rule.BuildPlan(c.db, stmt)
 	if err != nil {
 		return err
 	}
